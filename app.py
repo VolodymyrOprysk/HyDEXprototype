@@ -57,64 +57,80 @@ if uploaded_file is not None:
 
         st.success(f"✓ File loaded successfully! {len(df)} data points")
 
-        # Separate charge and discharge for calculations
-        df_discharge = df[df["Current"] > 0].copy()
-        df_charge = df[df["Current"] < 0].copy()
+        # Classify each row by current type
+        # Charge: negative current, Pause: zero or very small current, Discharge: positive current
+        current_threshold = 0.01  # mA threshold to consider as "zero" current
 
-        # Detect cycles by finding when current changes sign
-        # Cycling starts with charge (negative current), followed by discharge (positive current)
-        current_sign = np.sign(df["Current"])
-        sign_changes = np.where(np.diff(current_sign) != 0)[0] + 1
+        def classify_current(current):
+            if current < -current_threshold:
+                return "charge"
+            elif current > current_threshold:
+                return "discharge"
+            else:
+                return "pause"
 
-        # Split data into segments (charge or discharge)
-        segment_boundaries = [0] + list(sign_changes) + [len(df)]
+        df["Phase"] = df["Current"].apply(classify_current)
 
+        # Detect phase changes to identify segment boundaries
+        phase_changes = np.where(df["Phase"].ne(df["Phase"].shift()))[0]
+        segment_boundaries = [0] + list(phase_changes) + [len(df)]
+
+        # Create segments with their phase type
+        segments = []
+        for i in range(len(segment_boundaries) - 1):
+            start_idx = segment_boundaries[i]
+            end_idx = segment_boundaries[i + 1]
+            segment_data = df.iloc[start_idx:end_idx].copy()
+
+            if len(segment_data) > 0:
+                phase_type = segment_data["Phase"].iloc[0]
+                segments.append({
+                    "type": phase_type,
+                    "data": segment_data,
+                    "start_idx": start_idx,
+                    "end_idx": end_idx
+                })
+
+        # Group segments into cycles (charge -> pause -> discharge pattern)
         cycles = []
         cycle_capacities = []
         cycle_times = []
-        cycle_discharge_data = []  # Store discharge data for each cycle
+        cycle_discharge_data = []
+        cycle_charge_data = []  # Store charge data for each cycle
 
-        # Group segments into cycles
-        # A cycle can start with either charge or discharge
         i = 0
         cycle_num = 0
-        while i < len(segment_boundaries) - 1:
-            segment_data = df.iloc[segment_boundaries[i] : segment_boundaries[i + 1]]
 
-            if len(segment_data) > 0:
-                # Check if this is a charge segment (negative current)
-                if segment_data["Current"].iloc[0] < 0:
-                    # This is a charge phase - look for the following discharge phase
-                    if i + 1 < len(segment_boundaries) - 1:
-                        discharge_data = df.iloc[segment_boundaries[i + 1] : segment_boundaries[i + 2]]
+        while i < len(segments):
+            # Look for a cycle pattern: charge -> pause -> discharge
+            # Or simplified: charge -> discharge (pause is optional)
 
-                        if len(discharge_data) > 0 and discharge_data["Current"].iloc[0] > 0:
-                            # Found a complete charge-discharge cycle
-                            cycle_num += 1
+            if segments[i]["type"] == "charge":
+                charge_segment = segments[i]
+                pause_segment = None
+                discharge_segment = None
 
-                            # Calculate discharge capacity: C = Δt × I
-                            time_start = discharge_data["Time"].values[0]
-                            time_end = discharge_data["Time"].values[-1]
-                            time_diff_hours = (time_end - time_start) / 60  # convert min to hours
+                # Look ahead for pause and/or discharge
+                next_idx = i + 1
 
-                            capacity = time_diff_hours * current_density  # mAh/g
+                # Check for optional pause
+                if next_idx < len(segments) and segments[next_idx]["type"] == "pause":
+                    pause_segment = segments[next_idx]
+                    next_idx += 1
 
-                            cycles.append(cycle_num)
-                            cycle_capacities.append(capacity)
-                            cycle_times.append(time_diff_hours)
-                            cycle_discharge_data.append(discharge_data.copy())
+                # Check for discharge
+                if next_idx < len(segments) and segments[next_idx]["type"] == "discharge":
+                    discharge_segment = segments[next_idx]
 
-                            i += 2  # Skip both charge and discharge segments
-                            continue
-
-                # Check if this is a discharge segment (positive current)
-                elif segment_data["Current"].iloc[0] > 0:
-                    # This is a discharge phase (may be first cycle without initial charge)
+                    # Found a complete cycle
                     cycle_num += 1
 
-                    # Calculate discharge capacity: C = Δt × I
-                    time_start = segment_data["Time"].values[0]
-                    time_end = segment_data["Time"].values[-1]
+                    # Calculate discharge capacity from discharge segment only
+                    discharge_data = discharge_segment["data"]
+                    charge_data = charge_segment["data"]
+
+                    time_start = discharge_data["Time"].values[0]
+                    time_end = discharge_data["Time"].values[-1]
                     time_diff_hours = (time_end - time_start) / 60  # convert min to hours
 
                     capacity = time_diff_hours * current_density  # mAh/g
@@ -122,8 +138,14 @@ if uploaded_file is not None:
                     cycles.append(cycle_num)
                     cycle_capacities.append(capacity)
                     cycle_times.append(time_diff_hours)
-                    cycle_discharge_data.append(segment_data.copy())
+                    cycle_discharge_data.append(discharge_data.copy())
+                    cycle_charge_data.append(charge_data.copy())
 
+                    # Move index past this complete cycle
+                    i = next_idx + 1
+                    continue
+
+            # If no cycle pattern found, move to next segment
             i += 1
 
         # Apply filter to ignore first cycle if requested
@@ -132,6 +154,7 @@ if uploaded_file is not None:
             cycle_capacities = cycle_capacities[1:]
             cycle_times = cycle_times[1:]
             cycle_discharge_data = cycle_discharge_data[1:]
+            cycle_charge_data = cycle_charge_data[1:]
             # Renumber cycles to start from 1
             cycles = list(range(1, len(cycles) + 1))
 
@@ -140,10 +163,10 @@ if uploaded_file is not None:
             st.subheader("Cyclic Stability")
             st.caption("💡 Click on any point to view the discharge curve for that cycle")
 
-            # Create two columns for cyclic stability and discharge curve
-            cycle_col1, cycle_col2 = st.columns([1, 1])
+            # Create two columns: 2/3 for plot, 1/3 for table
+            plot_col, table_col = st.columns([2, 1])
 
-            with cycle_col1:
+            with plot_col:
                 fig3 = go.Figure()
                 fig3.add_trace(
                     go.Scatter(
@@ -175,33 +198,77 @@ if uploaded_file is not None:
                         selected_cycle_idx = selection["points"][0]["point_index"]
                         st.session_state["selected_cycle"] = selected_cycle_idx
 
-            with cycle_col2:
-                # Display discharge curve if a cycle is selected
-                if "selected_cycle" in st.session_state and st.session_state["selected_cycle"] is not None:
-                    selected_idx = st.session_state["selected_cycle"]
+            with table_col:
+                # Display per-cycle discharge data table
+                st.write("**Per-Cycle Data:**")
+                cycle_df = pd.DataFrame({
+                    'Cycle': cycles,
+                    'Time (h)': [f"{t:.2f}" for t in cycle_times],
+                    'Capacity (mAh/g)': [f"{c:.2f}" for c in cycle_capacities]
+                })
+                st.dataframe(cycle_df, use_container_width=True, hide_index=True, height=400)
 
-                    if 0 <= selected_idx < len(cycle_discharge_data):
-                        selected_data = cycle_discharge_data[selected_idx]
-                        selected_cycle_num = cycles[selected_idx]
+            # Display charge and discharge curves side by side below if a cycle is selected
+            if "selected_cycle" in st.session_state and st.session_state["selected_cycle"] is not None:
+                selected_idx = st.session_state["selected_cycle"]
 
+                if 0 <= selected_idx < len(cycle_discharge_data):
+                    selected_discharge_data = cycle_discharge_data[selected_idx]
+                    selected_charge_data = cycle_charge_data[selected_idx]
+                    selected_cycle_num = cycles[selected_idx]
+
+                    st.divider()
+                    st.subheader(f"Cycle {selected_cycle_num} - Charge & Discharge Curves")
+
+                    # Create two columns for charge and discharge curves
+                    charge_col, discharge_col = st.columns(2)
+
+                    with charge_col:
+                        # Create charge curve plot
+                        fig_charge = go.Figure()
+
+                        # Normalize time to start from 0 for better visualization
+                        time_normalized_charge = selected_charge_data["Time"].values - selected_charge_data["Time"].values[0]
+
+                        fig_charge.add_trace(
+                            go.Scatter(
+                                x=time_normalized_charge,
+                                y=selected_charge_data["Voltage"].values,
+                                mode="lines",
+                                line=dict(color="blue", width=2),
+                                name="Charge",
+                            )
+                        )
+
+                        fig_charge.update_layout(
+                            title="Charge Curve",
+                            xaxis_title="Time (min)",
+                            yaxis_title="Voltage (V)",
+                            hovermode="x unified",
+                            template="plotly_white",
+                        )
+
+                        st.plotly_chart(fig_charge, use_container_width=True)
+
+                    with discharge_col:
                         # Create discharge curve plot
                         fig_discharge = go.Figure()
 
                         # Normalize time to start from 0 for better visualization
-                        time_normalized = selected_data["Time"].values - selected_data["Time"].values[0]
+                        time_normalized_discharge = selected_discharge_data["Time"].values - selected_discharge_data["Time"].values[0]
 
                         fig_discharge.add_trace(
                             go.Scatter(
-                                x=time_normalized,
-                                y=selected_data["Voltage"].values,
+                                x=time_normalized_discharge,
+                                y=selected_discharge_data["Voltage"].values,
                                 mode="lines",
                                 line=dict(color="green", width=2),
-                                name=f"Cycle {selected_cycle_num}",
+                                name="Discharge",
                             )
                         )
 
                         fig_discharge.update_layout(
-                            title=f"Discharge Curve - Cycle {selected_cycle_num}",
+                            title="Discharge Curve",
                             xaxis_title="Time (min)",
                             yaxis_title="Voltage (V)",
                             hovermode="x unified",
@@ -210,12 +277,12 @@ if uploaded_file is not None:
 
                         st.plotly_chart(fig_discharge, use_container_width=True)
 
-                        # Add button to clear selection
-                        if st.button("Clear Selection"):
-                            st.session_state["selected_cycle"] = None
-                            st.rerun()
-                else:
-                    st.info("👈 Click on a point in the Cyclic Stability plot to view the discharge curve")
+                    # Add button to clear selection
+                    if st.button("Clear Selection"):
+                        st.session_state["selected_cycle"] = None
+                        st.rerun()
+            else:
+                st.info("👆 Click on a point in the Cyclic Stability plot to view the charge and discharge curves")
 
         elif len(cycles) == 1:
             st.info(
@@ -225,30 +292,20 @@ if uploaded_file is not None:
         st.divider()
 
         # Analysis results and statistics section
-        st.subheader("📊 Analysis Results")
+        st.divider()
+        st.subheader("📊 Overall Statistics")
 
-        # Show cycle information
-        if len(cycles) > 0:
-            st.metric("Total Cycles", len(cycles))
-
-        # Display individual cycle capacities with discharge time
         if len(cycle_capacities) > 0:
-            st.divider()
-            st.write("**Per-Cycle Discharge Data:**")
-
-            # Create a dataframe for better display
-            cycle_df = pd.DataFrame({
-                'Cycle': cycles,
-                'Time (h)': [f"{t:.2f}" for t in cycle_times],
-                'Capacity (mAh/g)': [f"{c:.2f}" for c in cycle_capacities]
-            })
-            st.dataframe(cycle_df, use_container_width=True, hide_index=True)
-
-            st.divider()
-            st.write("**Overall Statistics:**")
-            st.write(f"• Max capacity: {max(cycle_capacities):.2f} mAh/g")
-            st.write(f"• Min capacity: {min(cycle_capacities):.2f} mAh/g")
-            st.write(f"• Average capacity: {np.mean(cycle_capacities):.2f} mAh/g")
+            # Show statistics in columns
+            stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
+            with stat_col1:
+                st.metric("Total Cycles", len(cycles))
+            with stat_col2:
+                st.metric("Max Capacity", f"{max(cycle_capacities):.2f} mAh/g")
+            with stat_col3:
+                st.metric("Min Capacity", f"{min(cycle_capacities):.2f} mAh/g")
+            with stat_col4:
+                st.metric("Avg Capacity", f"{np.mean(cycle_capacities):.2f} mAh/g")
         else:
             st.warning("No discharge cycles detected")
 
