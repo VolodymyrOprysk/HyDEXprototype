@@ -23,11 +23,26 @@ with st.sidebar:
         help="Enter the current density used in the experiment",
     )
 
-    ignore_first_cycle = st.checkbox(
-        "Ignore First Cycle",
-        value=False,
-        help="Exclude the first cycle from analysis (useful if first cycle is formation)",
+    st.subheader("Y-axis Scale (Cyclic Stability)")
+    auto_scale = st.checkbox(
+        "Auto Scale",
+        value=True,
+        help="Automatically scale Y-axis based on data range",
     )
+
+    if not auto_scale:
+        y_min = st.number_input(
+            "Y-axis Min (mAh/g)",
+            value=0.0,
+            step=10.0,
+            help="Minimum value for Y-axis",
+        )
+        y_max = st.number_input(
+            "Y-axis Max (mAh/g)",
+            value=200.0,
+            step=10.0,
+            help="Maximum value for Y-axis",
+        )
 
 if uploaded_file is not None:
     # Read the data
@@ -148,16 +163,6 @@ if uploaded_file is not None:
             # If no cycle pattern found, move to next segment
             i += 1
 
-        # Apply filter to ignore first cycle if requested
-        if ignore_first_cycle and len(cycles) > 0:
-            cycles = cycles[1:]
-            cycle_capacities = cycle_capacities[1:]
-            cycle_times = cycle_times[1:]
-            cycle_discharge_data = cycle_discharge_data[1:]
-            cycle_charge_data = cycle_charge_data[1:]
-            # Renumber cycles to start from 1
-            cycles = list(range(1, len(cycles) + 1))
-
         # Plot cyclic stability at the top if multiple cycles detected
         if len(cycles) > 1:
             st.subheader("Cyclic Stability")
@@ -180,10 +185,15 @@ if uploaded_file is not None:
                     )
                 )
 
+                # Configure Y-axis range based on user settings
+                yaxis_config = dict(title="Specific Discharge Capacity (mAh/g)")
+                if not auto_scale:
+                    yaxis_config["range"] = [y_min, y_max]
+
                 fig3.update_layout(
                     title="Cyclic Stability (Click on a point)",
                     xaxis_title="Cycle Number",
-                    yaxis_title="Specific Discharge Capacity (mAh/g)",
+                    yaxis=yaxis_config,
                     hovermode="x unified",
                     template="plotly_white",
                 )
