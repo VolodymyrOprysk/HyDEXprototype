@@ -386,14 +386,10 @@ else:
     0.092    -1.0171    -5.9485e+00    d8
     ```
 
-    **Phase Indicators:**
-    - `d8`, `d9`, etc. = Discharge cycle (number indicates cycle)
-    - `c8`, `c9`, etc. = Charge cycle (number indicates cycle)
-
     The analyzer will automatically:
     - Detect charge/discharge cycles
     - Calculate specific discharge capacity
     - Plot cyclic stability
-    - Show individual cycle curves
+    - Show individual cycle curves (on demand)
     """
     )
