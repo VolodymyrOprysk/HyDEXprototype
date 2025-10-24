@@ -10,9 +10,9 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 from config import setup_page
 
-setup_page("Charge-Discharge Analyzer (new)")
+setup_page("Electrochemical Analyzer (.txt)")
 
-st.title("⚡ Charge-Discharge Analyzer")
+st.title("⚡ Electrochemical Analyzer (.txt)")
 
 # Sidebar for inputs
 with st.sidebar:

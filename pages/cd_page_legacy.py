@@ -9,9 +9,9 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 from config import setup_page
 
-setup_page("Electrochemical Data Analyzer")
+setup_page("Electrochemical Analyzer (.dat)")
 
-st.title("🔋 Electrochemical Data Analyzer")
+st.title("🔋 Electrochemical Analyzer (.dat)")
 
 # Sidebar for settings
 with st.sidebar:
