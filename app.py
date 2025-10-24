@@ -12,8 +12,9 @@ pages = {
         st.Page("pages/prf_page.py", title="FullProf PRF Visualizer", icon="📈"),
     ],
     "Electrochemistry Tools": [
-        st.Page("pages/cd_page.py", title="Charge-Discharge Data", icon="⚡"),
-        st.Page("pages/cva_page.py", title="CVA Data", icon="🔬"),
+        st.Page("pages/cd_page.py", title="Electrochemical Analyzer (.txt)", icon="⚡"),
+        st.Page("pages/cd_page_legacy.py", title="Electrochemical Analyzer (.dat)", icon="🔋"),
+        st.Page("pages/cva_page.py", title="CVA Data (TBD)", icon="🔬"),
     ]
 }
 

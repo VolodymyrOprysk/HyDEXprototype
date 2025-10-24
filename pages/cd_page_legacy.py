@@ -6,18 +6,17 @@ from io import StringIO
 import sys
 from pathlib import Path
 
-# Add parent directory to path to import config
 sys.path.append(str(Path(__file__).parent.parent))
 from config import setup_page
 
-setup_page("Charge-Discharge Analyzer (new)")
+setup_page("Electrochemical Data Analyzer")
 
-st.title("⚡ Charge-Discharge Analyzer")
+st.title("🔋 Electrochemical Data Analyzer")
 
-# Sidebar for inputs
+# Sidebar for settings
 with st.sidebar:
     st.header("Settings")
-    uploaded_file = st.file_uploader("Upload .txt file", type=["txt"])
+    uploaded_file = st.file_uploader("Upload .dat file", type=["dat", "txt"])
 
     st.subheader("Calculation Parameters")
     current_density = st.number_input(
@@ -50,46 +49,65 @@ with st.sidebar:
         )
 
 if uploaded_file is not None:
-    # Read the data
     try:
-        # Read the file content
+        # Read and parse the .dat file
         content = uploaded_file.read().decode("utf-8")
+        lines = content.strip().split('\n')
 
-        # Try to read with different delimiters (header in first row)
-        for delimiter in ["\t", r"\s+", ",", ";"]:
-            try:
-                df = pd.read_csv(
-                    StringIO(content),
-                    sep=delimiter,
-                    header=0,
-                    skipinitialspace=True,
-                    engine="python" if delimiter == r"\s+" else "c",
-                )
-                if len(df.columns) >= 3 and len(df) > 0:
-                    # Rename columns to standard names if needed
-                    if len(df.columns) >= 3:
-                        df.columns = ["Time", "Voltage", "Current"] + list(
-                            df.columns[3:]
-                        )
-                    break
-            except:
+        # Skip header line
+        data_lines = lines[1:]
+
+        # Parse data
+        times = []
+        voltages = []
+        currents = []
+        phases = []
+
+        for line in data_lines:
+            if not line.strip():
                 continue
+
+            parts = line.split()
+            if len(parts) >= 3:
+                try:
+                    time = float(parts[0])
+                    voltage = float(parts[1])
+                    current = float(parts[2])
+                    phase = parts[3] if len(parts) > 3 else 'unknown'
+
+                    times.append(time)
+                    voltages.append(voltage)
+                    currents.append(current)
+                    phases.append(phase)
+                except ValueError:
+                    continue
+
+        df = pd.DataFrame({
+            'Time': times,
+            'Voltage': voltages,
+            'Current': currents,
+            'Phase_Indicator': phases
+        })
 
         st.success(f"✓ File loaded successfully! {len(df)} data points")
 
-        # Classify each row by current type
-        # Charge: negative current, Pause: zero or very small current, Discharge: positive current
-        current_threshold = 0.01  # mA threshold to consider as "zero" current
-
-        def classify_current(current):
-            if current < -current_threshold:
+        # Classify phase based on phase indicator (d8 = discharge, c8 = charge)
+        def classify_phase(phase_indicator):
+            phase_str = str(phase_indicator).lower()
+            if 'd' in phase_str:
                 return "charge"
-            elif current > current_threshold:
+            elif 'c' in phase_str:
                 return "discharge"
             else:
                 return "pause"
 
-        df["Phase"] = df["Current"].apply(classify_current)
+        df["Phase"] = df["Phase_Indicator"].apply(classify_phase)
+
+        # Extract cycle number from phase indicator (e.g., d8 -> 8, c8 -> 8)
+        df['Cycle_Number'] = df['Phase_Indicator'].apply(
+            lambda x: ''.join(filter(str.isdigit, str(x))) if str(x) != 'unknown' else '0'
+        )
+        df['Cycle_Number'] = pd.to_numeric(df['Cycle_Number'], errors='coerce').fillna(0).astype(int)
 
         # Detect phase changes to identify segment boundaries
         phase_changes = np.where(df["Phase"].ne(df["Phase"].shift()))[0]
@@ -116,7 +134,7 @@ if uploaded_file is not None:
         cycle_capacities = []
         cycle_times = []
         cycle_discharge_data = []
-        cycle_charge_data = []  # Store charge data for each cycle
+        cycle_charge_data = []
 
         i = 0
         cycle_num = 0
@@ -354,19 +372,28 @@ if uploaded_file is not None:
 
     except Exception as e:
         st.error(f"Error reading file: {str(e)}")
-        st.info("Please ensure your file has 3 columns: Time, Voltage, Current")
+        st.info("Please ensure your file has the correct format with phase indicators (d8, c8, etc.)")
 
 else:
-    st.info("👆 Upload a .txt file to get started")
+    st.info("👆 Upload a .dat file to get started")
     st.markdown(
         """
     ### Expected file format:
-    - **Column 1:** Time (minutes)
-    - **Column 2:** Voltage (V)
-    - **Column 3:** Current (mA)
-        - Negative values = Charge
-        - Positive values = Discharge
+    ```
+    t,min    V,Volts    I,mA    [phase]
+    0.025    -1.0134    -5.9691e+00    d8
+    0.058    -1.0160    -5.9691e+00    d8
+    0.092    -1.0171    -5.9485e+00    d8
+    ```
 
-    Supported delimiters: tab, space, comma, semicolon
+    **Phase Indicators:**
+    - `d8`, `d9`, etc. = Discharge cycle (number indicates cycle)
+    - `c8`, `c9`, etc. = Charge cycle (number indicates cycle)
+
+    The analyzer will automatically:
+    - Detect charge/discharge cycles
+    - Calculate specific discharge capacity
+    - Plot cyclic stability
+    - Show individual cycle curves
     """
     )
